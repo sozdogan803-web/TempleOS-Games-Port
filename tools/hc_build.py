@@ -31,7 +31,7 @@ def runtime_natives(rt_dir=RT_DIR):
     """Names the C runtime defines itself (`... h_Name(` or a global `... h_Name;`/`=`/`[`):
     they override any translated body or definition."""
     names = set()
-    for f in glob.glob(os.path.join(rt_dir, '*.c')):
+    for f in glob.glob(os.path.join(rt_dir, '*.c')) + glob.glob(os.path.join(rt_dir, '*.m')):
         txt = open(f).read()
         names |= set(re.findall(r'^\w[\w \*]*?\bh_(\w+)\(', txt, re.M))
         names |= set(re.findall(r'^(?!static|extern|typedef)\w[\w \*]*?\bh_(\w+)\s*(?:=|;|\[)', txt, re.M))

@@ -1,12 +1,29 @@
 /* Portable C versions of TempleOS's asm/hardware primitives: memory, strings, bits,
    math, queues, hash tables, exceptions and the I/O ports the kernel pokes.
    Each h_Name here replaces the stub hc_emit.py writes for it. */
+#include <stdarg.h>
+#include <time.h>
+#include "rt.h"
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
 #include <intrin.h>
-#include <stdarg.h>
-#include "rt.h"
+#else
+#include <execinfo.h>
+#include <sys/mman.h>
+__attribute__((noinline)) static int RtlCaptureStackBackTrace(int skip, int n, void **pcs, void *hash)
+{ /* backtrace(), skipping this frame too */
+  void *b[64];
+  int m = backtrace(b, 64) - ++skip;
+  (void)hash;
+  if (m <= 0) return 0;
+  if (m > n) m = n;
+  memcpy(pcs, b + skip, (size_t)m * sizeof *pcs);
+  return m;
+}
+#define _AddressOfReturnAddress() __builtin_frame_address(0)
+#endif
 
 c_CTask *tos_fs;
 c_CCPU *tos_gs;
@@ -115,14 +132,23 @@ static void *blk_alloc(size_t n)
   uint8_t *p;
   if (heap_debug < 0) heap_debug = getenv("TOS_HEAPCHECK") != NULL;
   if (!heap_debug) return calloc(1, n);
+#ifdef _WIN32
   if (!(p = VirtualAlloc(NULL, blk_len(n) + 4096, MEM_RESERVE, PAGE_NOACCESS)) ||
       !VirtualAlloc(p, blk_len(n), MEM_COMMIT, PAGE_READWRITE)) return NULL;
+#else
+  if ((p = mmap(NULL, blk_len(n) + 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0)) == MAP_FAILED ||
+      mprotect(p + blk_len(n), 4096, PROT_NONE)) return NULL;
+#endif
   return p + blk_len(n) - ((n + 15) & ~(size_t)15);
 }
 static void blk_free(void *h, size_t n)
 {
   if (!heap_debug) free(h);
+#ifdef _WIN32
   else { DWORD old; VirtualProtect((void *)((uintptr_t)h & ~(uintptr_t)4095), blk_len(n), PAGE_READONLY, &old); }
+#else
+  else mprotect((void *)((uintptr_t)h & ~(uintptr_t)4095), blk_len(n), PROT_READ);
+#endif
 }
 
 uint8_t *h_MAlloc(int64_t size, c_CTask *t)
@@ -506,6 +532,12 @@ int8_t h_HashRemDel(c_CHash *h, c_CHashTable *t, int64_t inst)
 
 uint8_t h_DrvTextAttrGet(uint8_t drv_let) { return 0x0F; }   /* BLACK<<4|WHITE: no drives here */
 
+/* KTask.HC's version also demands 0<task<=I32_MAX; host heaps can sit above 4 GB (always on Apple Silicon). */
+int8_t h_TaskValidate(c_CTask *task)
+{
+  return (uintptr_t)task >= 4096 && task->m_addr == task && task->m_task_signature == TASK_SIG;
+}
+
 /* ---- CPU state that has no meaning here ---- */
 c_CTask *h_Fs(void) { return tos_fs; }
 c_CCPU *h_Gs(void) { return tos_gs; }
@@ -520,8 +552,10 @@ uint8_t *h_Caller(int64_t n) { return NULL; }
 void h_CLFlush(uint8_t *a) {}
 void h_CPUId(uint32_t rax, c_CRAXRBCRCXRDX *r)
 {
-  int v[4];
+  int v[4] = {0};
+#ifdef _WIN32
   __cpuid(v, (int)rax);
+#endif
   r->m_rax = (uint32_t)v[0]; r->m_rbx = (uint32_t)v[1]; r->m_rcx = (uint32_t)v[2]; r->m_rdx = (uint32_t)v[3];
 }
 int8_t h_DbgMode(int8_t val) { return 0; }
@@ -590,16 +624,16 @@ int rt_kbd_pending(void) { return kbd_tail != kbd_head; }
 
 static uint8_t cmos_read(uint8_t reg)
 {
-  SYSTEMTIME st;
-  GetLocalTime(&st);
+  time_t now = time(NULL);
+  struct tm *st = localtime(&now);
   switch (reg) {
-  case 0: return (uint8_t)st.wSecond;
-  case 2: return (uint8_t)st.wMinute;
-  case 4: return (uint8_t)st.wHour;
-  case 6: return (uint8_t)st.wDayOfWeek;
-  case 7: return (uint8_t)st.wDay;
-  case 8: return (uint8_t)st.wMonth;
-  case 9: return (uint8_t)(st.wYear % 100);
+  case 0: return (uint8_t)st->tm_sec;
+  case 2: return (uint8_t)st->tm_min;
+  case 4: return (uint8_t)st->tm_hour;
+  case 6: return (uint8_t)st->tm_wday;
+  case 7: return (uint8_t)st->tm_mday;
+  case 8: return (uint8_t)(st->tm_mon + 1);
+  case 9: return (uint8_t)(st->tm_year % 100);
   case 0x0B: return 0x06;   /* binary values, 24 hour */
   default: return 0;
   }

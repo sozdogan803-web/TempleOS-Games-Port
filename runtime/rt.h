@@ -2,6 +2,12 @@
 #pragma once
 #include "tos_gen.h"
 
+#ifndef _WIN32
+#include <strings.h>
+#define _stricmp strcasecmp
+#define strtok_s strtok_r
+#endif
+
 #define TASK_SIG        0x536B7354   /* 'TskS' */
 #define TASKf_KILL_TASK     1
 #define TASKf_SUSPENDED     2

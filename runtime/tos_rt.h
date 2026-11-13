@@ -10,8 +10,14 @@
 #ifdef _MSC_VER
 #pragma warning(disable: 4005 4013 4018 4024 4028 4033 4047 4090 4100 4101 4102 4113 4133 4146 4189 4200 4244 4267 4305 4306 4307 4308 4309 4310 4312 4389 4554 4700 4715 4716 4723 4756 4789)
 #define TOS_TLS __declspec(thread)
+#define TOS_NOOPT            /* hc_emit.py also wraps these in #pragma optimize("", off) */
+#define TOS_WEAK
+#define TOS_STUB(n) __stub_##n   /* linked in by /alternatename unless the runtime defines n */
 #else
 #define TOS_TLS __thread
+#define TOS_NOOPT __attribute__((optnone, noinline))   /* functions with try: locals must survive longjmp */
+#define TOS_WEAK __attribute__((weak))                  /* the runtime's own definition wins */
+#define TOS_STUB(n) n
 #endif
 
 static inline double __i2f(int64_t i) { double d; memcpy(&d, &i, 8); return d; }
