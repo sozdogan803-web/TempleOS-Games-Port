@@ -12,6 +12,9 @@ library, menus and pop-ups are TempleOS's own code, translated. A small C runtim
 only what was hardware or assembly language (memory, task switching, keyboard, mouse,
 screen, PC speaker, clock).
 
+Rest in peace, Terry Davis, who made this project possible. Truly a good man; may he rest in
+peace.
+
 ## System requirements
 
 | | Minimum | Most it will use |
