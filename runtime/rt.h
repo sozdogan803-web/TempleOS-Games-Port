@@ -13,6 +13,7 @@ extern TosTry *tos_try_top;          /* the running task's try stack */
 
 void rt_fatal(const char *fmt, ...);
 void rt_print_stack(void **pcs, int n);   /* symbolized, to stderr */
+int rt_backtrace(int skip, int n, void **pcs);   /* like RtlCaptureStackBackTrace, which is XP and later */
 void rt_report_except(const char *what);  /* Fs->except_ch and where it was thrown, to stderr */
 
 /* 8042 keyboard data port, filled by the host window */

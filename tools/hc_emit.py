@@ -37,10 +37,14 @@ def cdecl(t, inner=''):
         cd = t.cdef
         return ((CINT[cd.ibase] if cd.ibase else clsname(cd)) + ' ' + inner).rstrip()
     if k == 'ptr':
+        if t.base.k == 'ptr':   # HolyC keeps pointers in 8-byte slots, also when C's are 4 (32-bit)
+            return ('TosPS *' + inner).rstrip()
         if t.base.k in ('arr', 'func'):
             return cdecl(t.base, '(*' + inner + ')')
         return cdecl(t.base, '*' + inner)
     if k == 'arr':
+        if t.base.k == 'ptr':
+            return 'TosPS ' + inner + '[%d]' % (t.n or 1)
         return cdecl(t.base, inner + '[%d]' % (t.n or 1))
     if k == 'func':
         return cdecl(t.ret, inner + '(' + param_types(t) + ')')
@@ -48,6 +52,15 @@ def cdecl(t, inner=''):
 
 def ctype(t):
     return cdecl(t)
+
+def ptr_to(t):
+    """C type of a plain pointer to a t object, for *(T*)&x accesses (a t* in HolyC terms may be TosPS*)."""
+    return cdecl(t, '(*)' if t.k in ('arr', 'func') else '*')
+
+def elem(arr, et, i):
+    """C lvalue for element i of array arr whose HolyC element type is et."""
+    r = '%s[%s]' % (arr, i)
+    return '(*(%s)&%s)' % (ptr_to(et), r) if et.k == 'ptr' else r
 
 def param_types(ft):
     ps = [cdecl(p.ty) for p in ft.params]
@@ -103,6 +116,26 @@ def byte_list(b):
     rows = [','.join(str(x) for x in b[i:i + 40]) for i in range(0, len(b), 40)]
     return '{\n' + ',\n'.join(rows) + '}'
 
+def slot32(t, void=None):
+    """Stack bytes a cdecl argument of type t takes on 32-bit x86 (None: a struct)."""
+    k = kind(t)
+    if k == 'v':
+        return void
+    if k == 's':
+        return None
+    return 8 if k == 'f' or (k == 'i' and sizeof_t(t) == 8) else 4
+
+def arg_conv(c, frm, to):
+    """C value c of type frm as type to, for fnref's adapters.  HolyC passes every argument as
+    8 raw bytes, so an F64 slot read as an integer (or back) keeps its bits."""
+    kf, kt = kind(frm), kind(to)
+    if kt == 'f' and kf != 'f':
+        return '__i2f((int64_t)%s(%s))' % ('(uintptr_t)' if kf == 'p' else '', c)
+    if kf == 'f' and kt != 'f':
+        c, kf = '__f2i(%s)' % c, 'i'
+    t = ctype(to if to.k != 'arr' else ptr(to.base))
+    return '((%s)(uintptr_t)(%s))' % (t, c) if 'p' in (kf, kt) else '((%s)(%s))' % (t, c)
+
 def ret_zero(t):
     k = kind(t)
     if k == 'v':
@@ -117,6 +150,7 @@ class Unit:
         s.prog, s.binmap = prog, binmap
         s.strs, s.nstr = [], 0
         s.bins = {}
+        s.adapters = {}
         s.failed = []
         s.cmem = {}
         s.static_done = set()
@@ -134,6 +168,48 @@ class Unit:
         if name not in s.bins:
             s.bins[name] = s.binmap[name]
         return cid(name)
+
+    def fnref(s, sym, to):
+        """Function sym as a `to` (function pointer) value.  A call through a pointer lays out its
+        arguments by the pointer's parameter types; on 32-bit x86 a pointer argument takes 4 stack
+        bytes and an I64 8, so where those differ from sym's own (KeepAway's ObjCompare(Obj*,Obj*)
+        given to QSortI64 as I64 (*)(I64,I64)) the 32-bit build calls through an adapter."""
+        c = '((%s)%s)' % (ctype(to), cname(sym))
+        ft, tt = sym.ty, to.base if to.k == 'ptr' else to
+        if tt.k != 'func' or ft.var:
+            return c
+        if tt.var:   # an ext[] slot (WinToTop): CallExtNum in runtime/rt_core.c calls it with six I64s
+            if tt.params:
+                return c
+            tt = Ty('func', ret=I64, params=[Sym('param', 'a%d' % i, I64) for i in range(6)])
+        n = min(len(ft.params), len(tt.params))
+        ts, fs = [slot32(p.ty) for p in tt.params], [slot32(p.ty) for p in ft.params]
+        if None in ts + fs or slot32(tt.ret, 0) is None or slot32(ft.ret, 0) is None:
+            return c   # a struct passed by value: not seen in TempleOS
+        ret_bad = kind(tt.ret) == 'i' and sizeof_t(tt.ret) == 8 and kind(ft.ret) in 'ip' and slot32(ft.ret) == 4
+        isf = lambda t: kind(t) == 'f'
+        # an F64 where the pointer type has an integer (Spawn(&Zoom,2.0(I64))): wrong on 64-bit too
+        flt = any(isf(tt.params[i].ty) != isf(ft.params[i].ty) for i in range(n)) or \
+            (kind(tt.ret) != 'v' and kind(ft.ret) != 'v' and isf(tt.ret) != isf(ft.ret))
+        if ts[:n] == fs[:n] and not ret_bad and not flt:
+            return c
+        key = (cname(sym), ctype(to))
+        if key not in s.adapters:
+            name = s.adapters[key] = '__adapt%d' % len(s.adapters)
+            args = [arg_conv('a%d' % i, tt.params[i].ty, ft.params[i].ty) for i in range(n)]
+            args += ['0'] * (len(ft.params) - n)   # what the caller doesn't pass
+            call = '%s(%s)' % (cname(sym), ', '.join(args))
+            if kind(tt.ret) == 'v':
+                body = call + ';'
+            elif kind(ft.ret) == 'v':
+                body = '%s; return 0;' % call
+            else:
+                body = 'return %s;' % arg_conv(call, ft.ret, tt.ret)
+            ps = ', '.join(cdecl(p.ty if p.ty.k != 'arr' else ptr(p.ty.base), 'a%d' % i) for i, p in enumerate(tt.params))
+            fn = 'static %s { %s }' % (cdecl(tt.ret, '%s(%s)' % (name, ps or 'void')), body)
+            s.strs += [fn] if flt else ['#ifdef TOS_X86', fn, '#endif']
+        a = '((%s)%s)' % (ctype(to), s.adapters[key])
+        return a if flt else 'TOS_X86_OR(%s, %s)' % (a, c)
 
     # -- classes
     def class_defs(s, cds):
@@ -182,7 +258,10 @@ class Unit:
                     if name in present:   # duplicate member name: HolyC lookups hit the first one
                         cn += '__dup%d' % len(lines)
                     present.add(name)
-                    lines.append(ind + cdecl(ty, cn) + ';')
+                    if ty.k == 'ptr':   # 8 bytes in HolyC, also where C pointers are 4
+                        lines.append(ind + 'union { %s; uint64_t __p%s; };' % (cdecl(ty, cn), cn))
+                    else:
+                        lines.append(ind + cdecl(ty, cn) + ';')
                 else:
                     if items_size(it[1], it[0] == 'u') == 0:
                         continue
@@ -248,7 +327,7 @@ class Unit:
             if x.k == 'bin' and not x.a:
                 return '((%s)%s)' % (ct, s.bin(x.v))
             if x.k == 'fref':
-                return '((%s)%s)' % (ct, cname(x.v))
+                return s.fnref(x.v, t)
             if x.k == 'addr' and x.a[0].k == 'var' and x.a[0].v.kind == 'var' and x.a[0].v.dyn is None:
                 return '((%s)&%s)' % (ct, cname(x.a[0].v))
             if x.k == 'var' and x.v.kind == 'var' and x.v.ty.k == 'arr' and x.v.dyn is None:
@@ -280,7 +359,7 @@ class Unit:
     def stub(s, sym):
         nm = cname(sym)
         return ['%s { __tos_unimpl("%s"); %s }' % (s.proto_named(sym, '__stub_' + nm), sym.name, ret_zero(sym.ty.ret)),
-                '#pragma comment(linker, "/alternatename:%s=__stub_%s")' % (nm, nm)]
+                'TOS_WEAK(%s)' % nm]
 
     def proto_named(s, sym, name):
         ft = sym.ty
@@ -294,6 +373,28 @@ class Unit:
                 for n, b in sorted(s.bins.items())]
 
 # ---------------------------------------------------------------- per function
+def addressed_ptr_vars(body):
+    """Pointer locals/params whose address is taken (&p): HolyC may store 8 bytes there (SwapI64(&p1,&p2))."""
+    found, seen = set(), set()
+    def walk(x):
+        if isinstance(x, N):
+            if id(x) in seen:
+                return
+            seen.add(id(x))
+            if x.k == 'addr' and x.a and x.a[0].k == 'var' and x.a[0].t.k == 'ptr':
+                found.add(x.a[0].v)
+            walk(x.a)
+            if isinstance(x.v, (N, tuple, list)):
+                walk(x.v)
+        elif isinstance(x, (tuple, list)):
+            for c in x:
+                walk(c)
+    walk(body)
+    return found
+
+def wide_decl(t, name):
+    return 'union { uint64_t v; %s; } %s' % (cdecl(t, 'p'), name)
+
 class FnEm:
     def __init__(s, u, fn):
         s.u, s.fn = u, fn
@@ -303,18 +404,19 @@ class FnEm:
         s.trydepth = 0
         s.nlab = 0
         s.ret = fn.ty.ret
+        s.wide = {v for v in addressed_ptr_vars(fn.body) if v in fn.params or (v in fn.locals and not v.static)}
         used = set()
         for i, ps in enumerate(fn.params):
             nm = 'p_' + cid(ps.name) if ps.name else 'p%d' % i
             used.add(nm)
-            s.names[ps] = nm
+            s.names[ps] = nm + '.p' if ps in s.wide else nm
         for l in fn.locals:
             nm, k = 'l_' + cid(l.name), 1
             while nm in used:
                 k += 1
                 nm = 'l_%s_%d' % (cid(l.name), k)
             used.add(nm)
-            s.names[l] = nm
+            s.names[l] = nm + '.p' if l in s.wide else nm
 
     def tmp(s, t):
         if t.k == 'arr':
@@ -342,6 +444,8 @@ class FnEm:
         return '((%s)(%s))' % (ct, c)
 
     def conv(s, e, to):
+        if e.k == 'fref' and kind(to) == 'p':
+            return s.u.fnref(e.v, to)
         return s.convc(s.ex(e), e.t, to)
 
     def truth(s, e):
@@ -378,11 +482,20 @@ class FnEm:
             t = e.t if kind(e.t) != 'f' or e.v == '-' else I64
             return '(%s(%s))' % (e.v, s.conv(x, t))
         if k == 'deref':
+            if e.t.k == 'ptr':   # a pointer loaded from its 8-byte slot
+                return '(*(%s)(%s))' % (ptr_to(e.t), s.ex(e.a[0]))
             return '(*(%s))' % s.ex(e.a[0])
         if k == 'addr':
+            if e.a[0].t.k == 'ptr':   # address of a pointer: a TosPS* so arithmetic steps 8 bytes
+                return '((%s)&%s)' % (ctype(e.t), s.lv(e.a[0]))
             return '(&%s)' % s.lv(e.a[0])
         if k in ('pre', 'post'):
             x = e.a[0]
+            pv = s.ptr_var_as_int(x)
+            if pv is not None:   # p(I64)++ (see asg)
+                X, ct, d = s.lv(pv), ctype(x.t), 1 if e.v == '++' else -1
+                new = '((%s)(%s = (%s)((%s)%s + %d)))' % (ct, X, ctype(pv.t), ct, X, d)
+                return new if k == 'pre' else '(%s - %d)' % (new, d)
             L = s.lv(x)
             if is_p(x.t) and elem_size(x.t) == 0:
                 return '(%s = (%s)((uint8_t*)(%s) %s 1))' % (L, ctype(x.t), L, e.v[0])
@@ -392,6 +505,8 @@ class FnEm:
             ac = s.ex(a)
             if elem_size(a.t) == 0 and a.t.base.k != 'func':
                 ac = '((uint8_t*)(%s))' % ac
+            if e.t.k == 'ptr':
+                return '(*(%s)&(%s)[%s])' % (ptr_to(e.t), ac, s.conv(i, I64))
             return '(%s)[%s]' % (ac, s.conv(i, I64))
         if k == 'mem':
             return s.mem(e)
@@ -424,7 +539,7 @@ class FnEm:
         if e.k == 'cast':
             x = e.a[0]
             if x.lv and sizeof_t(x.t) == sizeof_t(e.t) or x.k in ('var', 'deref', 'idx', 'mem'):
-                return '(*(%s)&%s)' % (ctype(ptr(e.t)), s.lv(x))
+                return '(*(%s)&%s)' % (ptr_to(e.t), s.lv(x))
             return s.ex(e)
         if e.k == 'var':
             return s.var(e.v)
@@ -441,10 +556,10 @@ class FnEm:
                 return '(((%s*)%s)->m_%s)' % (clsname(cd), base, cid(m))
             off = member_offset(cd, m)
             if t.k == 'arr':
-                return '(*(%s)((uint8_t*)%s + %d))' % (cdecl(t.base, '(*)[1]'), base, off)
+                return '(*(%s)((uint8_t*)%s + %d))' % ('TosPS (*)[1]' if t.base.k == 'ptr' else cdecl(t.base, '(*)[1]'), base, off)
             if kind(t) == 'v':   # U0 marker member: only its address is meaningful
                 return '(*((uint8_t*)%s + %d))' % (base, off)
-            return '(*(%s)((uint8_t*)%s + %d))' % (ctype(ptr(t)), base, off)
+            return '(*(%s)((uint8_t*)%s + %d))' % (ptr_to(t), base, off)
         return '(%s).m_%s' % (s.lv(obj), cid(m))
 
     def cast(s, e):
@@ -455,11 +570,13 @@ class FnEm:
             return s.convc('__f2i(%s)' % s.ex(x), I64, e.t)
         if is_struct(e.t) or is_struct(x.t):
             if x.lv:
-                return '(*(%s)&%s)' % (ctype(ptr(e.t)), s.lv(x))
+                return '(*(%s)&%s)' % (ptr_to(e.t), s.lv(x))
             if is_struct(e.t):
                 t = s.tmp(x.t)
-                return '(%s = %s, *(%s)&%s)' % (t, s.ex(x), ctype(ptr(e.t)), t)
+                return '(%s = %s, *(%s)&%s)' % (t, s.ex(x), ptr_to(e.t), t)
             return s.ex(x)
+        if x.k == 'fref' and kind(e.t) == 'p':
+            return s.u.fnref(x.v, e.t)
         return s.convc(s.ex(x), x.t, e.t)
 
     def call(s, e):
@@ -551,8 +668,24 @@ class FnEm:
             terms.append('(%s %s %s)' % (s.convc(lc, l.t, d), op, s.convc(first[i + 1], r.t, d)))
         return '((int64_t)(%s))' % ' && '.join(terms)
 
+    def ptr_var_as_int(s, l):
+        """The pointer variable x when l is x(I64) (8-byte int view of a pointer variable), else None."""
+        if l.k == 'cast' and l.a[0].k == 'var' and l.a[0].t.k == 'ptr' and kind(l.t) == 'i' and sizeof_t(l.t) == 8:
+            return l.a[0]
+        return None
+
     def asg(s, e):
         op, (l, r) = e.v, e.a
+        x = s.ptr_var_as_int(l)
+        if x is not None:   # p(I64) += n: on 32-bit, *(int64_t*)&p would write past p
+            lt, X = l.t, s.lv(x)
+            if op == '=':
+                v = s.conv(r, lt)
+            else:
+                bop = op[:-1]
+                t = s.arith_t(bop, lt, r.t) if bop not in ('<<', '>>') else lt
+                v = s.convc(s.arith(bop, '((%s)%s)' % (ctype(lt), X), lt, s.ex(r), r.t, t), t, lt)
+            return '((%s)(%s = (%s)(%s)))' % (ctype(lt), X, ctype(x.t), v)
         L, lt = s.lv(l), l.t
         if op == '=':
             if lt.k == 'arr':
@@ -575,7 +708,8 @@ class FnEm:
         body = []
         s.stmt(fn.body if isinstance(fn.body, tuple) else ('block', fn.body), body, '  ')
         sym = fn.sym
-        ps = ['%s' % cdecl(p.ty if p.ty.k != 'arr' else ptr(p.ty.base), s.names[p]) for p in fn.params]
+        ps = ['%s' % cdecl(p.ty if p.ty.k != 'arr' else ptr(p.ty.base), s.names[p][:-2] + '__in' if p in s.wide else s.names[p])
+              for p in fn.params]
         if not ps:
             ps = ['void']
         head = cdecl(sym.ty.ret, '%s(%s)' % (name or cname(sym), ', '.join(ps)))
@@ -583,6 +717,10 @@ class FnEm:
         if fn.has_try:
             out.append('#pragma optimize("", off)')
         out.append(head + ' {')
+        for p in fn.params:
+            if p in s.wide:
+                n = s.names[p][:-2]
+                out.append('  %s = {(uint64_t)(uintptr_t)%s__in};' % (wide_decl(p.ty, n), n))
         for l in fn.locals:
             out.append('  ' + s.local_decl(l))
         for t in s.tmps:
@@ -599,6 +737,8 @@ class FnEm:
         t = l.ty
         if t.k == 'prim' and t.name == 'U0':
             t = I64
+        if l in s.wide:
+            return wide_decl(t, s.names[l][:-2]) + ' = {0};'
         d = cdecl(t, s.names[l])
         if l.static:
             init = s.static_inits.get(l) if hasattr(s, 'static_inits') else None
@@ -693,7 +833,7 @@ class FnEm:
                 out.append(ind + '%s = calloc(%s, %d);' % (tgt, s.conv(sym.dyn, I64), sizeof_t(sym.ty.base) or 1))
                 if init is not None and init[0] == 'list':
                     for i, it in enumerate(init[1]):
-                        s.init_assign('%s[%d]' % (tgt, i), sym.ty.base, it, out, ind)
+                        s.init_assign(elem(tgt, sym.ty.base, i), sym.ty.base, it, out, ind)
                 return
             if init is not None:
                 s.init_assign(tgt, sym.ty, init, out, ind)
@@ -731,7 +871,7 @@ class FnEm:
             if t.k == 'arr':
                 out.append(ind + 'memset(%s, 0, %d);' % (tgt, sizeof_t(t)))
                 for i, it in enumerate(items):
-                    s.init_assign('%s[%d]' % (tgt, i), t.base, it, out, ind)
+                    s.init_assign(elem(tgt, t.base, i), t.base, it, out, ind)
                 return
             if is_struct(t):
                 mem = [(n, ty) for n, ty in t.cdef.order if sizeof_t(ty)]
@@ -749,7 +889,7 @@ class FnEm:
                 out.append(ind + 'memcpy(%s, %s, %d);' % (tgt, s.u.string(e.v), n))
                 return
             if e.t.k not in ('arr', 'ptr') or t.base.k == 'ptr':
-                s.init_assign('%s[0]' % tgt, t.base, init, out, ind)   # scalar for an array member: first element (CInit.HC: pad[3] <- 0)
+                s.init_assign(elem(tgt, t.base, 0), t.base, init, out, ind)   # scalar for an array member: first element (CInit.HC: pad[3] <- 0)
                 return
             out.append(ind + 'memcpy(%s, %s, %d);' % (tgt, s.ex(e), sizeof_t(t)))
             return
@@ -909,7 +1049,7 @@ def emit_lib(p, out_dir):
     for sym in prog.gvars:   # declared extern but never defined anywhere: weak zero definition
         if sym not in defined and sym.name not in p.rt:
             gl.append('%s;' % u.gdecl(sym, ).replace(cname(sym), '__stub_' + cname(sym), 1))
-            gl.append('#pragma comment(linker, "/alternatename:%s=__stub_%s")' % (cname(sym), cname(sym)))
+            gl.append('TOS_WEAK(%s)' % cname(sym))
     stubs = []
     for sym in prog.funcs:
         if (sym.native or not getattr(sym, 'func', None)) and sym.name not in p.rt:

@@ -22,7 +22,7 @@ void rt_spk(int64_t hz)
 
 static DWORD WINAPI snd_thread(LPVOID arg)
 {
-  HANDLE ev = CreateEventW(NULL, FALSE, FALSE, NULL);
+  HANDLE ev = CreateEventA(NULL, FALSE, FALSE, NULL);
   WAVEFORMATEX wf = {WAVE_FORMAT_PCM, 1, RATE, RATE * 2, 2, 16, 0};
   HWAVEOUT wo;
   static int16_t buf[NBUF][NSMP];

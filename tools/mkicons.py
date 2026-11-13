@@ -101,21 +101,74 @@ def ico(raw_path, ico_path):
     px = d[8:8 + w * h]
     pack_ico([png(s, s, square(w, h, px, s)) for s in SIZES], ico_path)
 
-def pack_ico(imgs, ico_path):
-    """imgs: PNG files' bytes, one per entry of SIZES"""
+def pack_ico(imgs, ico_path, sizes=SIZES, colors=0, bpp=32):
+    """imgs: PNG files' bytes (or classic DIB images), one per entry of sizes"""
     head = struct.pack('<HHH', 0, 1, len(imgs))
     off = 6 + 16 * len(imgs)
     dirs = b''
-    for s, im in zip(SIZES, imgs):
-        dirs += struct.pack('<BBBBHHII', s % 256, s % 256, 0, 0, 1, 32, len(im), off)
+    for s, im in zip(sizes, imgs):
+        dirs += struct.pack('<BBBBHHII', s % 256, s % 256, colors, 0, 1, bpp, len(im), off)
         off += len(im)
     open(ico_path, 'wb').write(head + dirs + b''.join(imgs))
+
+def unpng(d):
+    """(w, h, RGBA bytes) of a non-interlaced 8-bit RGB/RGBA PNG, as png() and System.Drawing write them."""
+    w, h, depth, ct, _, _, il = struct.unpack_from('>IIBBBBB', d, 16)
+    assert depth == 8 and ct in (2, 6) and not il, (depth, ct, il)
+    n, idat, o = (4 if ct == 6 else 3), b'', 8
+    while o < len(d):
+        ln, t = struct.unpack_from('>I4s', d, o)
+        if t == b'IDAT':
+            idat += d[o + 8:o + 8 + ln]
+        o += 12 + ln
+    raw, st = zlib.decompress(idat), w * n
+    out, prev = bytearray(), bytearray(st)
+    for y in range(h):
+        f, row = raw[y * (st + 1)], bytearray(raw[y * (st + 1) + 1:(y + 1) * (st + 1)])
+        for i in range(st):
+            a, b, c = (row[i - n] if i >= n else 0), prev[i], (prev[i - n] if i >= n else 0)
+            if f == 4:
+                p = a + b - c
+                a = a if abs(p - a) <= abs(p - b) and abs(p - a) <= abs(p - c) else b if abs(p - b) <= abs(p - c) else c
+            row[i] = (row[i] + (0, a, b, (a + b) // 2, a)[f]) & 255
+        out += row if n == 4 else b''.join(row[i:i + 3] + b'\xff' for i in range(0, st, 3))
+        prev = row
+    return w, h, bytes(out)
+
+def dib4(w, h, rgba):
+    """Classic 16-colour icon image, which every Windows since 95 reads (PNG frames need Vista):
+    the TempleOS palette, nearest colour, and a 1-bit transparency mask."""
+    xr, mr = (w // 2 + 3) & ~3, ((w + 31) // 32) * 4
+    xor, msk = bytearray(xr * h), bytearray(mr * h)
+    for y in range(h):
+        o = h - 1 - y   # rows bottom-up
+        for x in range(w):
+            r, g, b, a = rgba[(y * w + x) * 4:(y * w + x) * 4 + 4]
+            if a < 128:
+                msk[o * mr + x // 8] |= 0x80 >> (x % 8)
+                continue
+            c = min(range(16), key=lambda i: sum((p - q) ** 2 for p, q in zip(PALETTE[i], (r, g, b))))
+            xor[o * xr + x // 2] |= c << (0 if x % 2 else 4)
+    pal = b''.join(bytes((b, g, r, 0)) for r, g, b in PALETTE)
+    return struct.pack('<IiiHHIIiiII', 40, w, 2 * h, 1, 4, 0, 0, 0, 0, 0, 0) + pal + bytes(xor) + bytes(msk)
+
+def classic(ico_in, ico_out, sizes=(16, 32, 48)):
+    """The 32-bit build's icon: ico_in's PNG frames of these sizes as 16-colour images."""
+    d = open(ico_in, 'rb').read()
+    frames = {}
+    for i in range(struct.unpack_from('<H', d, 4)[0]):
+        s, _, _, _, _, _, size, off = struct.unpack_from('<BBBBHHII', d, 6 + 16 * i)
+        frames[s or 256] = d[off:off + size]
+    pack_ico([dib4(*unpng(frames[s])) for s in sizes], ico_out, sizes, 16, 4)
 
 def self_check():
     px = bytes([TRANSPARENT, 15, 4, TRANSPARENT])   # 2x2: white and red on the diagonal-ish
     s = square(2, 2, px, 4)
     assert s[3] == 0 and s[(0 * 4 + 2) * 4:(0 * 4 + 2) * 4 + 4] == bytes((255, 255, 255, 255))
     assert png(1, 1, b'\0\0\0\0').startswith(b'\x89PNG')
+    assert unpng(png(4, 4, s)) == (4, 4, s)
+    d = dib4(4, 4, s)[104:]   # after header + palette: 4 pixel rows then 4 mask rows, 4 bytes each, bottom-up
+    assert len(d) == 32 and d[12:14] == b'\x00\xff' and d[4:6] == b'\x44\x00' and d[16 + 12] == 0xC0 and d[16 + 4] == 0x30
 
 if __name__ == '__main__':
     self_check()
@@ -123,6 +176,8 @@ if __name__ == '__main__':
         gen(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:])
     elif sys.argv[1] == 'pack':   # pack <out.ico> <16.png> <24.png> ... <256.png>
         pack_ico([open(f, 'rb').read() for f in sys.argv[3:]], sys.argv[2])
+    elif sys.argv[1] == 'classic':   # classic <in.ico> <out.ico>
+        classic(sys.argv[2], sys.argv[3])
     else:
         d = sys.argv[2]
         for f in sorted(os.listdir(d)):

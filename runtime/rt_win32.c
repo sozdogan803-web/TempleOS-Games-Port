@@ -1,12 +1,16 @@
 /* Windows host: process start-up, the window, keyboard/mouse, the clock, and
-   TempleOS's task switcher on Win32 fibers (one fiber per CTask). */
+   TempleOS's task switcher (one fiber per CTask).
+   The 32-bit build runs on Windows 95 and later, so it calls only what Windows 95 and NT 4
+   export; newer functions (fibers on 95, vectored exceptions, dbghelp) are looked up at run time. */
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
 #include <windowsx.h>
+#include <mmsystem.h>
 #include <dbghelp.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "rt.h"
 
 void __tos_game_main(void);
@@ -26,21 +30,22 @@ static struct { BITMAPINFOHEADER h; RGBQUAD pal[256]; } bmi;
 
 /* Testing aid: TOS_SHOT=<file.bmp> [TOS_SHOT_MS=<ms>] saves the frame shown after that
    many ms (default 4000) and exits. */
-static void shot(c_CDC *d)
+static void shot(const uint8_t *bits)
 {
   static int64_t when = -1;
   const char *path = getenv("TOS_SHOT");
   BITMAPFILEHEADER fh = {0};
+  DWORD n = (DWORD)bmi.h.biWidth * (DWORD)(bmi.h.biHeight < 0 ? -bmi.h.biHeight : bmi.h.biHeight);
   FILE *f;
   if (!path) return;
   if (when < 0) when = getenv("TOS_SHOT_MS") ? _atoi64(getenv("TOS_SHOT_MS")) : 4000;
   if (h_cnts.m_jiffies < when || !(f = fopen(path, "wb"))) return;
   fh.bfType = 0x4D42;
   fh.bfOffBits = sizeof fh + sizeof bmi;
-  fh.bfSize = fh.bfOffBits + (DWORD)(d->m_width_internal * d->m_height);
+  fh.bfSize = fh.bfOffBits + n;
   fwrite(&fh, sizeof fh, 1, f);
   fwrite(&bmi, sizeof bmi, 1, f);
-  fwrite(d->m_body, 1, (size_t)(d->m_width_internal * d->m_height), f);
+  fwrite(bits, 1, n, f);
   fclose(f);
   ExitProcess(0);
 }
@@ -60,6 +65,7 @@ static RECT dest_rect(void)
 static void present(HDC dc)
 {
   c_CDC *d = h_gr.m_dc2;
+  const uint8_t *bits;
   RECT rc, r;
   int i;
   if (!ready || !d) return;
@@ -71,10 +77,24 @@ static void present(HDC dc)
   }
   bmi.h.biSize = sizeof bmi.h;
   bmi.h.biWidth = d->m_width_internal;
-  bmi.h.biHeight = -d->m_height;
   bmi.h.biPlanes = 1;
   bmi.h.biBitCount = 8;
   bmi.h.biClrUsed = 256;
+#ifdef _WIN64
+  bmi.h.biHeight = -d->m_height;   /* top-down */
+  bits = d->m_body;
+#else
+  { /* bottom-up rows: top-down DIBs are newer than some of the Windows versions this build is for */
+    static uint8_t *flip;
+    static size_t flip_n;
+    size_t row = (size_t)d->m_width_internal, n = row * (size_t)d->m_height;
+    int64_t y;
+    if (flip_n < n) { free(flip); flip = malloc(n); flip_n = n; }
+    for (y = 0; y < d->m_height; y++) memcpy(flip + (size_t)(d->m_height - 1 - y) * row, d->m_body + (size_t)y * row, row);
+    bmi.h.biHeight = (LONG)d->m_height;
+    bits = flip;
+  }
+#endif
   GetClientRect(hwnd, &rc);
   r = dest_rect();
   PatBlt(dc, 0, 0, rc.right, r.top, BLACKNESS);   /* letterbox bars */
@@ -82,9 +102,9 @@ static void present(HDC dc)
   PatBlt(dc, 0, r.top, r.left, r.bottom - r.top, BLACKNESS);
   PatBlt(dc, r.right, r.top, rc.right - r.right, r.bottom - r.top, BLACKNESS);
   SetStretchBltMode(dc, COLORONCOLOR);
-  StretchDIBits(dc, r.left, r.top, r.right - r.left, r.bottom - r.top, 0, 0, d->m_width, d->m_height, d->m_body,
+  StretchDIBits(dc, r.left, r.top, r.right - r.left, r.bottom - r.top, 0, 0, d->m_width, d->m_height, bits,
                 (BITMAPINFO *)&bmi, DIB_RGB_COLORS, SRCCOPY);
-  shot(d);
+  shot(bits);
 }
 
 void h_GrUpdateVGAGraphics(void)
@@ -139,36 +159,38 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
     return 0;
   }
   }
-  return DefWindowProcW(h, m, wp, lp);
+  return DefWindowProcA(h, m, wp, lp);
 }
 
 static void make_window(void)
 {
-  WNDCLASSW wc = {0};
+  WNDCLASSA wc = {0};
   RECT r = {0, 0, 640, 480}, wa;
-  int s;
-  wchar_t title[MAX_PATH], *p;
-  GetModuleFileNameW(NULL, title, MAX_PATH);
-  if ((p = wcsrchr(title, L'\\'))) wcscpy(title, p + 1);
-  if ((p = wcsrchr(title, L'.'))) *p = 0;
+  int s, fit;
+  char title[MAX_PATH], *p;
+  GetModuleFileNameA(NULL, title, MAX_PATH);
+  if ((p = strrchr(title, '\\'))) memmove(title, p + 1, strlen(p + 1) + 1);
+  if ((p = strrchr(title, '.'))) *p = 0;
   wc.lpfnWndProc = wndproc;
-  wc.hInstance = GetModuleHandleW(NULL);
-  wc.lpszClassName = L"TempleOSGame";
-  wc.hIcon = LoadIconW(wc.hInstance, MAKEINTRESOURCEW(1));   /* the game's TempleOS icon (build.cmd links it in) */
-  if (!wc.hIcon) wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
-  RegisterClassW(&wc);
-  SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);   /* whole-number scale that fits 90% of the screen */
+  wc.hInstance = GetModuleHandleA(NULL);
+  wc.lpszClassName = "TempleOSGame";
+  wc.hIcon = LoadIconA(wc.hInstance, MAKEINTRESOURCEA(1));   /* the game's TempleOS icon (build.cmd links it in) */
+  if (!wc.hIcon) wc.hIcon = LoadIconA(NULL, IDI_APPLICATION);
+  RegisterClassA(&wc);
+  if (!SystemParametersInfoA(SPI_GETWORKAREA, 0, &wa, 0))   /* whole-number scale that fits 90% of the screen */
+    SetRect(&wa, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
   s = (wa.right - wa.left) * 9 / 10 / 640;
   if ((wa.bottom - wa.top) * 9 / 10 / 480 < s) s = (wa.bottom - wa.top) * 9 / 10 / 480;
-  if (s < 1) s = 1;
+  if (!(fit = s >= 1)) s = 1;
   r.right *= s; r.bottom *= s;
   AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
   r.right -= r.left; r.bottom -= r.top;   /* now the window's width and height */
   r.left = wa.left + (wa.right - wa.left - r.right) / 2;
   r.top = wa.top + (wa.bottom - wa.top - r.bottom) / 2;
-  hwnd = CreateWindowW(wc.lpszClassName, title, WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+  hwnd = CreateWindowA(wc.lpszClassName, title, WS_OVERLAPPEDWINDOW | WS_VISIBLE,
                        r.left > wa.left ? r.left : wa.left, r.top > wa.top ? r.top : wa.top,
                        r.right, r.bottom, NULL, NULL, wc.hInstance, NULL);
+  if (!fit) ShowWindow(hwnd, SW_MAXIMIZE);   /* e.g. a 640x480 screen: shrink the picture a little to fit */
 }
 
 /* Testing aid: TOS_KEYS="1500:39,1600:B9" feeds scan-code bytes (hex) at those ms. */
@@ -190,7 +212,7 @@ static void scripted_keys(void)
 static void pump(void)
 {
   MSG msg;
-  while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) DispatchMessageW(&msg);
+  while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) DispatchMessageA(&msg);
   scripted_keys();
   while (rt_kbd_pending()) h_KbdPktRead();   /* the keyboard IRQ's job: one call per byte at port 0x60 */
 }
@@ -211,13 +233,113 @@ void rt_idle(void)
 }
 void h_SysHlt(void) { rt_idle(); }
 
+/* ---- fibers ---- */
+static void WINAPI fiber_main(void *p);
+#ifdef _WIN64
+static void *fiber_new(void *r) { return CreateFiberEx(64 << 10, 8 << 20, FIBER_FLAG_FLOAT_SWITCH, fiber_main, r); }
+static void *fiber_of_thread(void) { return ConvertThreadToFiberEx(NULL, FIBER_FLAG_FLOAT_SWITCH); }
+#define fiber_switch SwitchToFiber
+#define fiber_del DeleteFiber
+#else
+/* Windows' fibers where it has them (98, NT 3.51 SP3 and later); on Windows 95 a stack switch
+   of our own, which TOS_NOFIBERS=1 also selects (to test it). Tasks only switch inside
+   fiber_switch, at a call, so the x87 stack is empty and no FPU state needs saving. */
+static LPVOID (WINAPI *k_CreateFiber)(SIZE_T, LPFIBER_START_ROUTINE, LPVOID);
+static LPVOID (WINAPI *k_ConvertThreadToFiber)(LPVOID);
+static VOID (WINAPI *k_SwitchToFiber)(LPVOID);
+static VOID (WINAPI *k_DeleteFiber)(LPVOID);
+
+typedef struct Ctx { void *esp, *seh, *stk_base, *stk_limit; uint8_t *mem; } Ctx;   /* offsets used by ctx_switch */
+static Ctx *ctx_cur;
+#define CTX_STACK (4 << 20)
+
+#pragma warning(disable: 4733)   /* ctx_switch sets the SEH head (fs:[0]) on purpose */
+static __declspec(naked) void __fastcall ctx_switch(Ctx *from, Ctx *to)
+{ /* save callee-saved registers and the TIB's SEH head and stack bounds; load to's */
+  __asm {
+    push ebp
+    push ebx
+    push esi
+    push edi
+    mov eax, fs:[0]
+    mov [ecx+4], eax
+    mov eax, fs:[4]
+    mov [ecx+8], eax
+    mov eax, fs:[8]
+    mov [ecx+12], eax
+    mov [ecx], esp
+    mov esp, [edx]
+    mov eax, [edx+4]
+    mov fs:[0], eax
+    mov eax, [edx+8]
+    mov fs:[4], eax
+    mov eax, [edx+12]
+    mov fs:[8], eax
+    pop edi
+    pop esi
+    pop ebx
+    pop ebp
+    ret
+  }
+}
+static LPVOID WINAPI my_ConvertThreadToFiber(LPVOID p) { (void)p; return ctx_cur = calloc(1, sizeof(Ctx)); }
+static LPVOID WINAPI my_CreateFiber(SIZE_T n, LPFIBER_START_ROUTINE fn, LPVOID arg)
+{
+  Ctx *c = calloc(1, sizeof *c);
+  uintptr_t *sp;
+  (void)n;
+  if (!c || !(c->mem = VirtualAlloc(NULL, CTX_STACK, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE))) { free(c); return NULL; }
+  sp = (uintptr_t *)(c->mem + CTX_STACK - 16);
+  *--sp = (uintptr_t)arg;   /* fn's argument */
+  *--sp = 0;                /* fn's return address: it never returns */
+  *--sp = (uintptr_t)fn;    /* where ctx_switch's ret goes */
+  sp -= 4;                  /* ebp ebx esi edi */
+  memset(sp, 0, 16);
+  c->esp = sp;
+  c->seh = (void *)(intptr_t)-1;   /* empty SEH chain */
+  c->stk_base = c->mem + CTX_STACK;
+  c->stk_limit = c->mem;
+  return c;
+}
+static VOID WINAPI my_SwitchToFiber(LPVOID to)
+{
+  Ctx *from = ctx_cur;
+  ctx_cur = to;
+  ctx_switch(from, to);
+}
+static VOID WINAPI my_DeleteFiber(LPVOID p)
+{
+  Ctx *c = p;
+  if (c->mem) VirtualFree(c->mem, 0, MEM_RELEASE);
+  free(c);
+}
+static void fibers_init(void)
+{
+  HMODULE k = GetModuleHandleA("kernel32.dll");
+  k_CreateFiber = (void *)GetProcAddress(k, "CreateFiber");
+  k_ConvertThreadToFiber = (void *)GetProcAddress(k, "ConvertThreadToFiber");
+  k_SwitchToFiber = (void *)GetProcAddress(k, "SwitchToFiber");
+  k_DeleteFiber = (void *)GetProcAddress(k, "DeleteFiber");
+  if (!k_CreateFiber || !k_ConvertThreadToFiber || !k_SwitchToFiber || !k_DeleteFiber || getenv("TOS_NOFIBERS")) {
+    k_CreateFiber = my_CreateFiber;
+    k_ConvertThreadToFiber = my_ConvertThreadToFiber;
+    k_SwitchToFiber = my_SwitchToFiber;
+    k_DeleteFiber = my_DeleteFiber;
+  }
+}
+static void *fiber_new(void *r) { return k_CreateFiber(64 << 10, fiber_main, r); }
+static void *fiber_of_thread(void) { fibers_init(); return k_ConvertThreadToFiber(NULL); }
+#define fiber_switch k_SwitchToFiber
+#define fiber_del k_DeleteFiber
+#endif
+
 /* ---- tasks on fibers (Sched.HC's _YIELD and _TASK_END_NOW) ---- */
 typedef struct TaskRt {
   c_CTask *task;
   void *fiber;
   TosTry *try_top;
-  void (*entry)(uint8_t *);
-  uint8_t *data;
+  void (*entry)(int64_t);   /* Spawn's function and data (an 8-byte slot, see FIXES in tools/hc_lex.py) */
+  int64_t data;
   struct TaskRt *next;
 } TaskRt;
 static TaskRt *rts, *cur_rt;
@@ -237,8 +359,8 @@ static TaskRt *rt_of(c_CTask *t, int create)
   if (!create) return NULL;
   r = calloc(1, sizeof *r);
   r->task = t;
-  r->entry = (void (*)(uint8_t *))t->m_rip;              /* Spawn put the start address in rip */
-  r->data = (uint8_t *)((int64_t *)t->m_rsp)[1];         /* ... and pushed data, then &Exit */
+  r->entry = (void (*)(int64_t))t->m_rip;   /* Spawn put the start address in rip */
+  r->data = ((int64_t *)t->m_rsp)[1];       /* ... and pushed data, then &Exit */
   r->next = rts;
   rts = r;
   return r;
@@ -246,7 +368,7 @@ static TaskRt *rt_of(c_CTask *t, int create)
 
 static void bury(void)
 {
-  if (grave) { DeleteFiber(grave); grave = NULL; }
+  if (grave) { fiber_del(grave); grave = NULL; }
 }
 
 static void WINAPI fiber_main(void *p)
@@ -265,9 +387,9 @@ static void switch_to(c_CTask *t)
   cur_rt = r;
   tos_fs = t;
   tos_try_top = r->try_top;
-  if (!r->fiber) r->fiber = CreateFiberEx(64 << 10, 8 << 20, FIBER_FLAG_FLOAT_SWITCH, fiber_main, r);
+  if (!r->fiber) r->fiber = fiber_new(r);
   if (!r->fiber) rt_fatal("CreateFiber failed (%lu)", GetLastError());
-  SwitchToFiber(r->fiber);
+  fiber_switch(r->fiber);
   bury();
 }
 
@@ -287,7 +409,7 @@ static c_CTask *end_task(c_CTask *t)
       while (*pp != r) pp = &(*pp)->next;
       *pp = r->next;
       if (r == cur_rt) { grave = r->fiber; cur_rt = NULL; }
-      else if (r->fiber) DeleteFiber(r->fiber);
+      else if (r->fiber) fiber_del(r->fiber);
       free(r);
     }
   } else if (next == t && !(t->m_task_flags >> TASKf_KILL_TASK & 1)) {   /* task_end_cb: restart at rip */
@@ -296,10 +418,10 @@ static c_CTask *end_task(c_CTask *t)
       ((void (*)(void))t->m_rip)();
       h_Exit();
     } else if (r) {
-      if (r->fiber) DeleteFiber(r->fiber);
+      if (r->fiber) fiber_del(r->fiber);
       r->fiber = NULL;
-      r->entry = (void (*)(uint8_t *))t->m_rip;
-      r->data = NULL;
+      r->entry = (void (*)(int64_t))t->m_rip;
+      r->data = 0;
       r->try_top = NULL;
     }
   }
@@ -339,6 +461,10 @@ void h_TosQuit(int8_t by_except)
   ExitProcess(by_except ? 5 : 0);
 }
 
+/* ---- crash reports: symbols come from dbghelp.dll and the .pdb when both are there ---- */
+static BOOL (WINAPI *d_SymFromAddr)(HANDLE, DWORD64, PDWORD64, PSYMBOL_INFO);
+static BOOL (WINAPI *d_SymGetLineFromAddr64)(HANDLE, DWORD64, PDWORD, PIMAGEHLP_LINE64);
+
 static void print_frame(DWORD64 pc)
 {
   static int sym_ready;
@@ -349,48 +475,108 @@ static void print_frame(DWORD64 pc)
   DWORD64 disp;
   DWORD d32;
   if (!sym_ready++) {
-    SymSetOptions(SYMOPT_LOAD_LINES | SYMOPT_UNDNAME);
-    SymInitialize(pr, NULL, TRUE);
+    HMODULE m = LoadLibraryA("dbghelp.dll");
+    BOOL (WINAPI *init)(HANDLE, PCSTR, BOOL) = m ? (void *)GetProcAddress(m, "SymInitialize") : NULL;
+    DWORD (WINAPI *opts)(DWORD) = m ? (void *)GetProcAddress(m, "SymSetOptions") : NULL;
+    if (init && opts) {
+      opts(SYMOPT_LOAD_LINES | SYMOPT_UNDNAME);
+      if (init(pr, NULL, TRUE)) {
+        d_SymFromAddr = (void *)GetProcAddress(m, "SymFromAddr");
+        d_SymGetLineFromAddr64 = (void *)GetProcAddress(m, "SymGetLineFromAddr64");
+      }
+    }
   }
   si->SizeOfStruct = sizeof(SYMBOL_INFO);
   si->MaxNameLen = 255;
   ln.SizeOfStruct = sizeof ln;
-  fprintf(stderr, "  %s", SymFromAddr(pr, pc, &disp, si) ? si->Name : "?");
-  if (SymGetLineFromAddr64(pr, pc, &d32, &ln)) fprintf(stderr, "  %s:%lu", ln.FileName, ln.LineNumber);
+  if (d_SymFromAddr && d_SymFromAddr(pr, pc, &disp, si)) fprintf(stderr, "  %s", si->Name);
+  else fprintf(stderr, "  %p", (void *)(uintptr_t)pc);
+  if (d_SymGetLineFromAddr64 && d_SymGetLineFromAddr64(pr, pc, &d32, &ln)) fprintf(stderr, "  %s:%lu", ln.FileName, ln.LineNumber);
   fputc('\n', stderr);
 }
 
 void rt_print_stack(void **pcs, int n)
 {
   int i;
-  for (i = 0; i < n; i++) print_frame((DWORD64)pcs[i]);
+  for (i = 0; i < n; i++) print_frame((DWORD64)(uintptr_t)pcs[i]);
   fflush(stderr);
+}
+
+#ifndef _WIN64
+static int ebp_walk(uintptr_t fp, void **pcs, int n)
+{ /* x86 is built with frame pointers (/Oy-): follow the EBP chain within this stack */
+  NT_TIB *tib = (NT_TIB *)NtCurrentTeb();
+  uintptr_t lo = (uintptr_t)tib->StackLimit, hi = (uintptr_t)tib->StackBase;
+  int i = 0;
+  while (i < n && fp >= lo && fp + 8 <= hi && !(fp & 3)) {
+    pcs[i++] = ((void **)fp)[1];
+    if (((uintptr_t *)fp)[0] <= fp) break;
+    fp = ((uintptr_t *)fp)[0];
+  }
+  return i;
+}
+#endif
+
+int rt_backtrace(int skip, int n, void **pcs)
+{ /* return addresses of the callers of rt_backtrace's caller, after skipping skip of them */
+#ifdef _WIN64
+  return RtlCaptureStackBackTrace(skip + 1, n, pcs, NULL);
+#else
+  void *all[64];
+  uintptr_t fp;
+  int k;
+  __asm mov fp, ebp
+  k = ebp_walk(fp, all, n + skip < 64 ? n + skip : 64);   /* all[0] is in our caller */
+  k = k > skip ? k - skip : 0;
+  memcpy(pcs, all + skip, k * sizeof *pcs);
+  return k;
+#endif
 }
 
 static LONG WINAPI crash(EXCEPTION_POINTERS *ep)
 { /* print a symbolized stack, then exit: the translated code has no other debugger */
   CONTEXT c = *ep->ContextRecord;
-  DWORD64 base;
   int i;
   fprintf(stderr, "TempleOS runtime: exception %08lX at %p in task '%s'\n", ep->ExceptionRecord->ExceptionCode,
           ep->ExceptionRecord->ExceptionAddress, tos_fs ? (char *)tos_fs->m_task_name : "?");
   if (ep->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && ep->ExceptionRecord->NumberParameters >= 2)
     fprintf(stderr, "  %s address %p\n", ep->ExceptionRecord->ExceptionInformation[0] ? "writing" : "reading",
             (void *)ep->ExceptionRecord->ExceptionInformation[1]);
+#ifdef _WIN64
   for (i = 0; i < 32 && c.Rip; i++) {
     PRUNTIME_FUNCTION f;
+    DWORD64 base;
     print_frame(c.Rip);
     f = RtlLookupFunctionEntry(c.Rip, &base, NULL);
     if (!f) { c.Rip = *(DWORD64 *)c.Rsp; c.Rsp += 8; }
     else { void *hd; DWORD64 ef; RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, c.Rip, f, &c, &hd, &ef, NULL); }
   }
+#else
+  {
+    void *pcs[32];
+    int n = ebp_walk(c.Ebp, pcs, 32);
+    print_frame(c.Eip);
+    for (i = 0; i < n; i++) print_frame((DWORD64)(uintptr_t)pcs[i]);
+  }
+#endif
   fflush(stderr);
   ExitProcess(4);
   return EXCEPTION_EXECUTE_HANDLER;
 }
-static LONG WINAPI heap_crash(EXCEPTION_POINTERS *ep)
-{ /* the C heap reports corruption straight to the debugger, past SetUnhandledExceptionFilter */
-  return ep->ExceptionRecord->ExceptionCode == 0xC0000374 ? crash(ep) : EXCEPTION_CONTINUE_SEARCH;
+static LONG WINAPI first_chance(EXCEPTION_POINTERS *ep)
+{ /* heap corruption goes straight to the debugger, past SetUnhandledExceptionFilter; on 32-bit,
+     tasks' stacks have no handler of Windows' own, so their faults are caught here too */
+  DWORD code = ep->ExceptionRecord->ExceptionCode;
+  if (code == 0xC0000374) return crash(ep);
+#ifndef _WIN64
+  if (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_ILLEGAL_INSTRUCTION || code == EXCEPTION_INT_DIVIDE_BY_ZERO ||
+      code == EXCEPTION_STACK_OVERFLOW || code == EXCEPTION_PRIV_INSTRUCTION || code == EXCEPTION_INT_OVERFLOW) {
+    MEMORY_BASIC_INFORMATION mi;   /* only faults in this program's own code */
+    if (VirtualQuery(ep->ExceptionRecord->ExceptionAddress, &mi, sizeof mi) && mi.AllocationBase == GetModuleHandleA(NULL))
+      return crash(ep);
+  }
+#endif
+  return EXCEPTION_CONTINUE_SEARCH;
 }
 
 int main(void)
@@ -400,16 +586,18 @@ int main(void)
   c_CCPU *cpu;
   uint8_t *vga;
   TaskRt *r;
+  PVOID (WINAPI *add_veh)(ULONG, PVECTORED_EXCEPTION_HANDLER) =
+    (void *)GetProcAddress(GetModuleHandleA("kernel32.dll"), "AddVectoredExceptionHandler");   /* XP and later */
 
   SetUnhandledExceptionFilter(crash);
-  AddVectoredExceptionHandler(1, heap_crash);
+  if (add_veh) add_veh(1, first_chance);
   timeBeginPeriod(1);
   rt_snd_init();
   QueryPerformanceFrequency(&qpf);
   QueryPerformanceCounter(&qpc0);
 
   fa = calloc(1, sizeof *fa);   /* SYS_FIXED_AREA (prelude.HC points it here) */
-  h_tos_fixed_area = (int64_t)fa;
+  h_tos_fixed_area = (int64_t)(uintptr_t)fa;
   vga = calloc(1, 0x20000);
   h_dev.m_uncached_alias = vga - 0xA0000;   /* text.vga_alias = uncached_alias + 0xA0000 */
 
@@ -433,7 +621,7 @@ int main(void)
 
   r = calloc(1, sizeof *r);
   r->task = adam;
-  r->fiber = ConvertThreadToFiberEx(NULL, FIBER_FLAG_FLOAT_SWITCH);
+  r->fiber = fiber_of_thread();
   rts = cur_rt = r;
 
   make_window();

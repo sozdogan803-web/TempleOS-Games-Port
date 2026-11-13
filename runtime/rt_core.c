@@ -34,7 +34,7 @@ void __tos_unimpl(const char *name)
   fprintf(stderr, "TempleOS runtime: %s not implemented, called from:\n", name);
   {
     void *pcs[5];
-    int n = RtlCaptureStackBackTrace(2, 5, pcs, NULL);   /* skip this and the stub */
+    int n = rt_backtrace(2, 5, pcs);   /* skip this and the stub */
     rt_print_stack(pcs, n);
   }
 }
@@ -84,7 +84,7 @@ void h_throw(int64_t ch, int8_t no_log)
   t->m_except_ch = ch;
   memset(t->m_except_callers, 0, sizeof t->m_except_callers);
   t->m_catch_except = 0;
-  throw_n = RtlCaptureStackBackTrace(0, 24, throw_pcs, NULL);
+  throw_n = rt_backtrace(0, 24, throw_pcs);
   run_next_handler();
 }
 
@@ -189,7 +189,7 @@ uint8_t *h_MAllocAligned(int64_t size, int64_t align, c_CTask *t, int64_t misali
 { /* same layout as MAllocFree.HC */
   int64_t mask = align - 1;
   uint8_t *p = h_MAlloc(size + mask + 8 + misalign, t);
-  uint8_t *r = (uint8_t *)((((uintptr_t)p + 8 + mask) & ~(uintptr_t)mask) + misalign);
+  uint8_t *r = (uint8_t *)((((uintptr_t)p + 8 + (uintptr_t)mask) & ~(uintptr_t)mask) + (uintptr_t)misalign);
   ((int64_t *)r)[-1] = p - r;
   return r;
 }
@@ -316,7 +316,7 @@ void h_ArcEntryGet(c_CArcCtrl *c)
     }
   } else {
     do if (++i == c->m_free_limit) i = c->m_min_table_entry;
-    while (c->m_hash[i]);
+    while (c->m_hash[i].p);
     tmp = &c->m_compress[i];
     c->m_next_entry = tmp;
     tmp1 = (c_CArcEntry *)&c->m_hash[tmp->m_basecode];   /* a hash slot doubles as an entry: next is at offset 0 */
@@ -445,14 +445,14 @@ int64_t h_HashStr(uint8_t *s)
   return (int64_t)rax;
 }
 
-c_CHash **h_HashBucketFind(uint8_t *s, c_CHashTable *t)
+TosPS *h_HashBucketFind(uint8_t *s, c_CHashTable *t)
 {
   return &t->m_body[h_HashStr(s) & t->m_mask];
 }
 
 static c_CHash *single_find(uint8_t *s, int64_t hash, c_CHashTable *t, int64_t mask, int64_t *inst, c_CHash ***where)
 {
-  c_CHash **pp = &t->m_body[hash & t->m_mask], *h;
+  c_CHash **pp = (c_CHash **)&t->m_body[hash & t->m_mask], *h;
   for (; (h = *pp); pp = &h->m_next)
     if ((h->m_type & (uint32_t)mask) && !strcmp((char *)h->m_str, (char *)s) && !--*inst) {
       h->m_use_cnt++;
@@ -481,7 +481,7 @@ c_CHash *h_HashFind(uint8_t *s, c_CHashTable *t, int64_t mask, int64_t inst)
 
 void h_HashAdd(c_CHash *h, c_CHashTable *t)
 {
-  c_CHash **b = h_HashBucketFind(h->m_str, t);
+  c_CHash **b = (c_CHash **)h_HashBucketFind(h->m_str, t);
   h->m_next = *b;
   *b = h;
 }
@@ -528,7 +528,7 @@ int8_t h_DbgMode(int8_t val) { return 0; }
 void h_Dbg(uint8_t *msg, int64_t num)
 {
   void *pcs[12];
-  int n = RtlCaptureStackBackTrace(1, 12, pcs, NULL);
+  int n = rt_backtrace(1, 12, pcs);
   fprintf(stderr, "TempleOS runtime: Dbg(\"%s\", %lld) from:\n", msg ? (char *)msg : "", (long long)num);
   rt_print_stack(pcs, n);
   exit(3);
@@ -542,7 +542,7 @@ int64_t h_CallExtNum(int64_t num, int64_t argc, int64_t *argv)
 { /* ext[] holds ordinary translated functions; pass the args as I64 registers */
   typedef int64_t (*F)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
   int64_t a[6] = {0};
-  F f = (F)h_ext[num];
+  F f = (F)h_ext[num].p;
   if (!f) return 0;
   if (argc > 6) rt_fatal("CallExtNum: %lld args", (long long)argc);
   memcpy(a, argv, argc * 8);

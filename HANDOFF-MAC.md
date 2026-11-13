@@ -12,6 +12,21 @@ version.
   `out/soak_sheet.png` shows what each game looks like after 40 s; use it as the reference.
 - **Mac: not started.** Nothing has been compiled with clang yet. The Windows PC had no Mac
   compiler, so everything below about the Mac comes from reading the code. Expect surprises.
+- **Later the same day: a 32-bit Windows build for Windows 95 to XP** (`out/x86/`, see the
+  README's "Old Windows"). If your copy of this folder came before it, these shared files
+  changed and the Mac port must allow for them:
+  - `tools/hc_emit.py` stores HolyC pointers in 8-byte slots (`TosPS`, a pointer/`uint64_t`
+    union in `runtime/tos_rt.h`). On 64-bit this changes types, not layout.
+  - Stubs for missing functions and globals are now `TOS_WEAK(name)` after a `__stub_name`
+    definition. `tos_rt.h` defines `TOS_WEAK` only for MSVC (`/alternatename`), so clang
+    needs its own way to make `__stub_name` the fallback for `name`.
+  - `runtime/rt_core.c` calls `rt_backtrace()` (declared in `rt.h`) instead of
+    `RtlCaptureStackBackTrace`; the Mac runtime must supply it (`backtrace()` will do).
+  - Spawn's `data` is now an `I64` (a `FIXES` entry in `tools/hc_lex.py`), and
+    `rt_win32.c` starts a task as `((void (*)(int64_t))rip)(data)`. Start tasks the same
+    way on the Mac. Adapters (`__adaptN` in `gen/*.c`) sit where a function is used through a
+    differently typed pointer; most apply only to 32-bit (`TOS_X86_OR`), but those that pass
+    an F64 apply everywhere: Strut's zoom and CastleFrankenstein's turn need them.
 
 ## For you, on the Mac
 

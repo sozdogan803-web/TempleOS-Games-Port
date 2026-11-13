@@ -210,6 +210,13 @@ FIXES = {
          'nearest_ball[o->team] && o->get_ball_dt<nearest_ball[o->team]->get_ball_dt)')],
     'Apps/X-Caliber/X-Caliber.HC': [   # ShotNew falls off the end; TempleOS left tmps in RAX
         ('QueIns(tmps,shot_head.last);\n}', 'QueIns(tmps,shot_head.last);\n  return tmps;\n}')],
+    # Not bugs: Spawn's data is an 8-byte stack slot, and Strut and CastleFrankenstein pass an F64
+    # through it (Spawn(&Zoom,2.0(I64))). An I64 keeps all 8 bytes where pointers are 4 (32-bit).
+    'Kernel/KernelC.HH': [
+        ('CTask *Spawn(U0 (*fp_addr)(U8 *data),U8 *data=NULL,', 'CTask *Spawn(U0 (*fp_addr)(I64 data),I64 data=NULL,')],
+    'Kernel/KTask.HC': [
+        ('CTask *Spawn(U0 (*fp_start_addr)(U8 *data),U8 *data=NULL,',
+         'CTask *Spawn(U0 (*fp_start_addr)(I64 data),I64 data=NULL,')],
 }
 # Corrupt bytes in TinkerOS's embedded sprites: (file, bin) -> [(offset, old, new)].
 BIN_FIXES = {

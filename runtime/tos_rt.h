@@ -10,9 +10,30 @@
 #ifdef _MSC_VER
 #pragma warning(disable: 4005 4013 4018 4024 4028 4033 4047 4090 4100 4101 4102 4113 4133 4146 4189 4200 4244 4267 4305 4306 4307 4308 4309 4310 4312 4389 4554 4700 4715 4716 4723 4756 4789)
 #define TOS_TLS __declspec(thread)
+#if defined(_M_IX86) && defined(TOS_NOCRT)   /* call rt_libc.c's x87 math, not the CRT's intrinsic forms */
+#pragma function(sqrt, sin, cos, tan, atan, atan2, exp, log, log10, pow, fmod, floor, ceil)
+#endif
+/* the translator's __stub_X is X's default unless the runtime defines X (x86 C names have a leading _) */
+#ifdef _M_IX86
+#define TOS_WEAK(n) __pragma(comment(linker, "/alternatename:_" #n "=___stub_" #n))
+#else
+#define TOS_WEAK(n) __pragma(comment(linker, "/alternatename:" #n "=__stub_" #n))
+#endif
 #else
 #define TOS_TLS __thread
 #endif
+
+/* 32-bit x86: the translator's adapters for functions called through a differently typed pointer */
+#if defined(_M_IX86) || defined(__i386__)
+#define TOS_X86 1
+#define TOS_X86_OR(x86, other) (x86)
+#else
+#define TOS_X86_OR(x86, other) (other)
+#endif
+
+/* HolyC pointers take 8 bytes in memory; a T** or an array of pointers points at these slots,
+   so the layout is the same where C pointers are 4 bytes (32-bit builds). */
+typedef union { void *p; uint64_t v; } TosPS;
 
 static inline double __i2f(int64_t i) { double d; memcpy(&d, &i, 8); return d; }
 static inline int64_t __f2i(double d) { int64_t i; memcpy(&i, &d, 8); return i; }
