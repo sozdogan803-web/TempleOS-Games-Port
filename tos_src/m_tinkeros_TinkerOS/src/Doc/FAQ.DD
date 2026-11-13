@@ -1,0 +1,14 @@
+$WW,1$$FG,5$$TX+CX,"Frequently Asked Questions"$$FG$
+
+$TR,"Why TinkerOS?"$
+$ID,2$$FG$It can run on more bare metal 64-bit PC's than TempleOS.
+$ID,-2$$TR,"Why not backport feature X to TempleOS?"$
+$ID,2$There is not official TempleOS continuation to contribute to. TinkerOS is backwards compatible with TempleOS to the maximum extent possible.
+$ID,-2$$TR,"What TempleOS applications are not compatible with TinkerOS?"$
+$ID,2$Applications which attempt to hi-jack the graphics system and use the old VGA registers.
+$ID,-2$$TR,"Why doesn't resolution X work?"$
+$ID,2$You can only use VBE supported graphics modes, use the VBE tool on the USB boot image to find out what will work with your monitor/system.
+$ID,-2$
+$FG$
+* See also the $FG,4$$LK,"TempleOS FAQ",A="FI:::/Doc/TempleOS/FAQ.DD"$$FG$
+

@@ -1,0 +1,32 @@
+//See $LK,"Install Documentation",A="FI:::/Doc/Install.DD"$.
+//Study my account examples: $LK,"Cfg Strs",A="FL:::/Demo/AcctExample/TOS/TOSCfg.HC,1"$, $LK,"Update Funs",A="FL:::/Demo/AcctExample/TOS/TOSDistro.HC,1"$
+
+#ifndef BDVD_START
+#include "BootDVD"
+#include "DskISORedSea"
+#include "DskISO9660"
+#endif
+
+#help_index "Install"
+
+#define KERNEL_BIN_C	"Kernel.BIN.C"
+#define BOOT_DIR	"/0000Boot"
+#define BOOT_DIR_KERNEL_BIN_C	BOOT_DIR "/0000" KERNEL_BIN_C
+
+public U0 BootDVDIns(U8 drv_let=0)
+{//Helper function for DoDistro
+  //See $LK,"::/Misc/DoDistro.HC"$.
+  try
+  {
+    if (!Drv(drv_let))
+      throw;
+    MakeAll;
+    Move("/Kernel/Kernel.BIN.Z",BOOT_DIR_KERNEL_BIN_C);
+  }
+  catch
+  {
+    PutExcept;
+    Beep;
+  }
+}
+

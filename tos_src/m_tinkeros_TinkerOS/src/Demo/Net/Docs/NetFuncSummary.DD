@@ -1,0 +1,238 @@
+PCNet
+	PCNetIOBaseGet
+	PCNetRst
+	PCNet32BitModeEnable
+	PCNetRAPWrite
+	PCNetBCRWrite
+	PCNetBCRRead
+	PCNetCSRWrite
+	PCNetCSRRead
+	PCNetSWStyleSet
+	PCNetMACGet
+	PCNetDescEntInit
+	PCNetBufsAlloc
+	$FG,7$PCNetDirectInit$FG$
+	PCNetInitBlockSetup
+	PCNetInterruptCSRSet
+	PCNetTXAutoPadEnable
+	PCNetCfgModeExit
+	PCNetUploadCfg
+	PCNetDriverOwns
+	PCNetTxPktAlloc
+	PCNetTxPktFinish
+	PCNetPktRx
+	PCNetRxPktRelease
+	PCNetIRQ
+	PCNetInterruptsSetup
+	PCNetInit
+
+	PCIInterruptsReroute
+
+	EthFrameFinish (driver alias of PCNetTxPktFinish)
+	EthFrameAlloc
+	EthMACGet
+
+	NetStop
+	NetStart
+
+NetQueue
+	NetQueInit
+	NetQuePull
+	NetQuePush
+
+Ethernet
+	EthGlblsInit
+	EthFramePrs
+
+ARP
+	ARPCacheInit
+	ARPCacheFind
+	ARPCachePut
+
+	ARPSend
+	ARPLocalIPV4Set
+	ARPHandler
+
+	ARPRep
+
+Sockets (just finite state modifiers)
+	AddrInfoCpy
+	AddrInfoFree
+	IPV4AddrPrs
+	PresToNet
+	NetToPres
+
+	SockStateErr
+	Sock
+	SockAccept
+	SockClose
+	SockBind
+	SockConnect
+	SockLsten
+	SockRx
+	SockRxFrom
+	SockSend
+	SockSendTo
+
+IPV4
+	IPV4GlblsInit
+	IPV4Checksum
+	IPV4AddrMACGet
+
+	IPV4PktAlloc
+	IPV4PktFinish (alias for EthFrameFinish)
+
+	IPV4AddrGet
+	IPV4AddrSet
+
+	IPV4SubnetSet
+	IPV4PktPrs
+
+	IPV4Rep
+
+ICMP
+	ICMPInit
+	ICMPChecksum
+	ICMPReplySend
+	ICMPReqSend
+	ICMPHandler
+
+TCP
+	IsTCPStateSync
+	TCPGlblsInit
+	TCPRxWindow
+	TCPChecksumPartial
+	TCPChecksumFinal
+	TCPPktAlloc
+	TCPPktFinish
+	TCPSend
+	TCPSendFlags
+	TCPSendData
+	TCPPktPrs
+	TCPAcknowledgePkt
+	TCPCheckACKQue
+	TCPSock
+	TCPSockTreeLink
+	TCPSockBind
+	TCPSockRelease
+	TCPSockClose
+	TCPSockConnect
+	TCPSockLsten
+	TCPSockAccept
+	TCPSockRx
+	TCPSockRxLine
+	TCPSockSend
+	TCPSockSendAll
+	TCPSockSendStr
+	TCPConnectionCreate
+
+	TCPHandler
+	TCPHandleRefuse
+	TCPHandleSock
+	TCPHandleSockLsten
+	TCPHandleRst
+	TCPHandleACK
+	TCPHandleValidSEQ
+
+	TCPTreeNodeInit
+	TCPTreeNodeAdd
+	TCPTreeNodeParamAdd
+	TCPTreeNodeParamInit
+	TCPTreeNodeFind
+	TCPTreeNodePop
+	TCPTreeNodeSinglePop
+
+	TCPTreeNodeQueAdd
+	TCPTreeQueEntInit
+	TCPTreeNodeQueSockFind
+	TCPTreeNodeQueIPV4Find
+	TCPTreeNodeQueSockSinglePop
+
+	TCPTreeNodeRep
+	TCPRep
+
+UDP
+	UDPTreeNodeInit
+	UDPTreeNodeAdd
+	UDPTreeNodeParamAdd
+	UDPTreeNodeParamInit
+	UDPTreeNodeFind
+	UDPTreeNodePop
+	UDPTreeNodeSinglePop
+
+	UDPTreeNodeQueAdd
+	UDPTreeQueEntInit
+	UDPTreeNodeQueSockFind
+	UDPTreeNodeQueIPV4Find
+	UDPTreeNodeQueSockSinglePop
+
+	UDPGlblsInit
+
+	UDPPktAlloc
+	UDPPktFinish (alias for IPV4PktFinish)
+	UDPPktPrs
+
+	UDPSock
+	UDPSockBind
+	UDPSockClose
+	UDPSockRxFrom
+	UDPSockSendTo
+
+	UDPHandler
+
+	UDPTreeNodeRep
+	UDPRep
+
+DNS
+	DNSCacheLock
+	DNSCacheUnlock
+	DNSCacheInit
+	DNSCacheFind
+	DNSCachePut
+
+	DNSQuestionSizeCalculate
+	DNSQuestionSerialize
+	DNSQuestionSend
+	DNSQuestionPrs
+	DNSQuestionBuild
+	DNSQuestionFree
+	DNSQuestionChainFree
+
+	DNSDomainNamePrs
+
+	DNSRRPrs
+	DNSRRFree
+	DNSRRChainFree
+
+	DNSResponsePrs
+
+	DNSQueryRun
+	DNSPrsDottedQuad
+	DNSAddrInfoGet
+	DNSResolverIPV4Set
+	Host
+
+	DNSRep
+
+DHCP
+	DHCPTransactionBegin
+	DHCPDiscoverSend
+	DHCPReqSend
+
+	DHCPBeginPrs
+	DHCPOptionPrs
+	DHCPOfferPrs
+	DHCPAckPrs
+
+	DHCPInnerCfg
+	DHCPCfg
+
+	NetCfg
+	NetRep
+
+NetHandler
+	IPV4Handler
+	NetQueEntHandle
+	NetHandler
+
+	NetHandlerInit

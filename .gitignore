@@ -1,0 +1,11 @@
+# Build outputs: gen.sh, build.cmd and build_mac.sh make these. The games go in GitHub Releases.
+obj/
+gen/
+out/*
+!out/icons/
+out/icons/*
+!out/icons/*.ico
+!out/soak_sheet.png
+/TempleOS-Games-macOS.zip
+__pycache__/
+.DS_Store

@@ -1,0 +1,16 @@
+$WW,1$$FG,5$$TX+CX,"Decisions Making TinkerOS Simple"$
+$FG$
+Everybody is obsessed, Jedi mind-tricked, by the notion that when you scale-up, it doesn't get bad, it gets worse.  They automatically think things are going to get bigger.  Guess what happens when you scale down?  It doesn't get good, it gets better!
+
+TinkerOS is a motorcycle -- if you lean-over too far, a motorcycle will crash.  Don't do that!  There are no side air bags on a motorcycle.  DOS and C64 had no memory protections and ran in ring-0, with no security.  This saves an order of magnitude complexity.
+
+* Everything runs in kernel, $FG,2$ring 0$FG$, mode.
+
+* $FG,2$One memory map$FG$ for all tasks on all cores with virtual addresses set equ to physical, just as though paging is not used.
+
+* One platform -- $FG,4$$TX,"x86_64",HTML="http://en.wikipedia.org/wiki/Amd64#AMD64"$$FG$ PC's, no 32-bit support.
+
+* Least (greatest) common denominator hardware support.  Mostly, one driver for each device class.  I can't be in the business of different drivers.  Compatibility is the greatest challenge for PC operating systems.  Disk code does not use interrupts, avoiding compatibility risks.  $FG,2$PS/2$FG$ keyboard/mouse is used instead of $FG,2$USB$FG$, also more compatible.
+
+* See also $FG,4$$LK,"TempleOS Strategy",A="FI:::/Doc/TempleOS/Strategy.DD"$$FG$
+
