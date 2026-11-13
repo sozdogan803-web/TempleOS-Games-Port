@@ -4,8 +4,8 @@ For the next Claude session. Packed 13 Nov 2026 on the Mac, after the Mac OS X p
 
 ## Update, 13 Nov 2026 evening: merged on Windows; the Mac must rebuild
 
-Step 1 below is done. The project is now a git repository (not pushed anywhere): `67cc045` is
-the copy the Mac port started from, `04fe23d` the Windows work since then, `93ef5a8` (branch
+Step 1 below is done. The project is now a git repository on GitHub: `cea4e71` is
+the copy the Mac port started from, `dc781b4` the Windows work since then, `8ce9076` (branch
 `mac`) this Mac package, and the merge commit on `main` joins them. The Windows side had
 changed shared files that the Mac build has not compiled yet:
 
