@@ -13,14 +13,20 @@
 #if defined(_M_IX86) && defined(TOS_NOCRT)   /* call rt_libc.c's x87 math, not the CRT's intrinsic forms */
 #pragma function(sqrt, sin, cos, tan, atan, atan2, exp, log, log10, pow, fmod, floor, ceil)
 #endif
-/* the translator's __stub_X is X's default unless the runtime defines X (x86 C names have a leading _) */
-#ifdef _M_IX86
-#define TOS_WEAK(n) __pragma(comment(linker, "/alternatename:_" #n "=___stub_" #n))
+#define TOS_NOOPT            /* hc_emit.py also wraps these in #pragma optimize("", off) */
+#define TOS_WEAK
+#define TOS_STUB(n) __stub_##n   /* linked in by TOS_ALTNAME unless the runtime defines n */
+#ifdef _M_IX86                   /* x86 C names have a leading _ */
+#define TOS_ALTNAME(n) __pragma(comment(linker, "/alternatename:_" #n "=___stub_" #n))
 #else
-#define TOS_WEAK(n) __pragma(comment(linker, "/alternatename:" #n "=__stub_" #n))
+#define TOS_ALTNAME(n) __pragma(comment(linker, "/alternatename:" #n "=__stub_" #n))
 #endif
 #else
+#define TOS_ALTNAME(n)
 #define TOS_TLS __thread
+#define TOS_NOOPT __attribute__((optnone, noinline))   /* functions with try: locals must survive longjmp */
+#define TOS_WEAK __attribute__((weak))                  /* the runtime's own definition wins */
+#define TOS_STUB(n) n
 #endif
 
 /* 32-bit x86: the translator's adapters for functions called through a differently typed pointer */

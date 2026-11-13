@@ -1,9 +1,11 @@
-# TempleOS games on Windows
+# TempleOS games on Windows and macOS
 
 The 37 games that ship with TempleOS 5.03 (Terry A. Davis, public domain), translated from
-HolyC to C and built as ordinary Windows programs. Each game is one `.exe` in `out/` with
-its TempleOS icon, and needs nothing else installed. `out/x86/` has 32-bit builds of the same
-games for old Windows, down to Windows 95 and NT 4.0 (see [Old Windows](#old-windows)).
+HolyC to C and built as ordinary Windows and Mac programs. Each game is one `.exe` in `out/`
+(or one `.app` in `out/mac/`) with its TempleOS icon, and needs nothing else installed.
+`out/x86/` has 32-bit builds of the same games for old Windows, down to Windows 95 and NT 4.0
+(see [Old Windows](#old-windows)); the Mac apps run from Mac OS X 10.6 on Intel and on Apple
+Silicon.
 
 The games run on the TempleOS library itself: the window manager, DolDoc, the graphics
 library, menus and pop-ups are TempleOS's own code, translated. A small C runtime replaces
@@ -39,7 +41,8 @@ been run on real machines that old.
 ## Playing
 
 Double-click `out/<Game>.exe` (on Windows XP or older, or any 32-bit Windows,
-`out/x86/<Game>.exe`). Controls are the same as in TempleOS:
+`out/x86/<Game>.exe`), or open `out/mac/<Game>.app` on a Mac (the first time, right-click it
+and choose **Open**). Controls are the same as in TempleOS:
 
 - the keys each game names in its help pop-up;
 - the mouse;
@@ -76,11 +79,9 @@ X-Caliber, Zing, ZoneOut.
   - Stadium: the converted `tos2` copy of `StadiumBG.GR` is 20 bytes short, so data files
     come from TinkerOS's uncompressed `.Z` originals when there is one (`data_file` in
     `tools/hc_emit.py`).
-- **macOS is not done.** The translated C is portable. Only `runtime/rt_win32.c` (window,
-  input, task switching on fibers) and `runtime/rt_snd.c` (waveOut audio) are Windows-only,
-  plus the `TOS_HEAPCHECK` allocator in `runtime/rt_core.c` (`VirtualAlloc`). A Mac version
-  needs those rewritten with Cocoa, Core Audio and `mmap`, and then testing on a Mac.
-  [HANDOFF-MAC.md](HANDOFF-MAC.md) is the step-by-step plan.
+- **macOS:** `runtime/rt_mac.m` (Cocoa window and input, AudioQueue speaker, tasks on
+  `ucontext`) replaces `rt_win32.c` and `rt_snd.c`; `build_mac.sh` makes `out/mac/<Game>.app`.
+  See "Rebuilding on macOS" below.
 
 ## Rebuilding
 
@@ -116,6 +117,47 @@ linked in.
 
 For the 32-bit build, set `TOS_ARCH=x86` first (`set TOS_ARCH=x86` in Command Prompt,
 `$env:TOS_ARCH="x86"` in PowerShell); `build.cmd` then writes `out/x86/<Game>.exe`.
+
+### Rebuilding on macOS
+
+Needs only Apple's command-line tools (`xcode-select --install`: clang and python3).
+
+```bash
+sh gen.sh $(cat tools/test/games.txt)                                  # HolyC -> gen/*.c
+sh build_mac.sh FlapBat                                                # -> out/mac/FlapBat.app
+sh build_mac.sh $(sed 's#.*/\(.*\)/Run.HC#\1#; s#.*/##; s#\.HC$##' tools/test/games.txt)   # all 37, in parallel
+python3 tools/test/soak.py --ms 19000                                  # 20 s random-key play of all 37
+```
+
+The apps are universal: Intel Macs from macOS 10.6 Snow Leopard (64-bit Core 2 and later),
+Apple Silicon from macOS 11. `TOS_ARCHS="-arch arm64"` builds for one only.
+`python3 tools/test/soak.py --arch x86_64` tests the Intel half under Rosetta. No version older
+than the build machine's macOS has been tested: the 10.6 claim rests on every imported symbol
+existing in 10.6, not on a run there. 32-bit-only Macs (2006 Core Solo/Duo) are not supported.
+
+`build_mac.sh` caches the library and runtime objects in `obj/mac` and recompiles them only
+when their source, headers or flags change. The apps are signed ad hoc, not with a developer
+certificate: the first time, right-click an app and choose **Open**. `soak.py` writes a
+screenshot per game, `summary.txt` and `sheet.png` (all screenshots on one page) to
+`out/mac/soak/`; `--no-keys --ms 4000` is the launch-only pass, `--reverse` changes each game's
+key sequence. A crash prints the signal, faulting address and stack (function names; run under
+`lldb` for lines).
+
+Mac-specific points:
+
+- The build uses `-ftrivial-auto-var-init=zero`. Some TempleOS code reads a local before
+  setting it (`Line`'s `_x`, guarded by `first`). MSVC leaves that alone; clang's optimizer
+  deleted the comparison, so ToTheFront drew no hex grid.
+- Functions with `try` are marked `TOS_NOOPT` (`optnone`), the clang twin of MSVC's
+  `#pragma optimize("", off)`, so locals survive `longjmp`.
+- For 10.6: `rt_mac.m` uses manual retain/release (ARC needs libarclite before 10.11, and
+  Xcode no longer ships it), checks post-10.6 APIs with `respondsToSelector`, and gives the
+  main task a 16 MB `mmap`'d stack instead of `-Wl,-stack_size`, which Rosetta refuses with
+  the old start-up format.
+- Stubs are weak symbols (`TOS_WEAK`/`TOS_STUB`), since Mach-O has no `/alternatename`
+  (`TOS_ALTNAME`, which the Windows build uses).
+- `TaskValidate` is replaced in `rt_core.c` without its `task<=I32_MAX` check: Apple Silicon
+  puts every heap address above 4 GB.
 
 ## Old Windows
 

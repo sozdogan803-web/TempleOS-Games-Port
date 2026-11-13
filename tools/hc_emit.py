@@ -358,8 +358,8 @@ class Unit:
 
     def stub(s, sym):
         nm = cname(sym)
-        return ['%s { __tos_unimpl("%s"); %s }' % (s.proto_named(sym, '__stub_' + nm), sym.name, ret_zero(sym.ty.ret)),
-                'TOS_WEAK(%s)' % nm]
+        return ['TOS_WEAK %s { __tos_unimpl("%s"); %s }' % (s.proto_named(sym, 'TOS_STUB(%s)' % nm), sym.name, ret_zero(sym.ty.ret)),
+                'TOS_ALTNAME(%s)' % nm]
 
     def proto_named(s, sym, name):
         ft = sym.ty
@@ -441,6 +441,8 @@ class FnEm:
             return '((%s)(int64_t)(%s))' % (ct, c)
         if kf == 'p' and kt == 'f':
             return '((double)(int64_t)(%s))' % c
+        if kf == 'p' and to.k == 'prim' and to.name == 'Bool':   # a pointer's low byte can be 0
+            return '((%s)((%s) != 0))' % (ct, c)
         return '((%s)(%s))' % (ct, c)
 
     def conv(s, e, to):
@@ -716,7 +718,7 @@ class FnEm:
         out = []
         if fn.has_try:
             out.append('#pragma optimize("", off)')
-        out.append(head + ' {')
+        out.append(('TOS_NOOPT ' if fn.has_try else '') + head + ' {')
         for p in fn.params:
             if p in s.wide:
                 n = s.names[p][:-2]
@@ -1048,8 +1050,8 @@ def emit_lib(p, out_dir):
     gl = u.global_defs([g for g in prog.gdefs if g[0].name not in p.rt], set())
     for sym in prog.gvars:   # declared extern but never defined anywhere: weak zero definition
         if sym not in defined and sym.name not in p.rt:
-            gl.append('%s;' % u.gdecl(sym, ).replace(cname(sym), '__stub_' + cname(sym), 1))
-            gl.append('TOS_WEAK(%s)' % cname(sym))
+            gl.append('TOS_WEAK %s;' % u.gdecl(sym, ).replace(cname(sym), 'TOS_STUB(%s)' % cname(sym), 1))
+            gl.append('TOS_ALTNAME(%s)' % cname(sym))
     stubs = []
     for sym in prog.funcs:
         if (sym.native or not getattr(sym, 'func', None)) and sym.name not in p.rt:
